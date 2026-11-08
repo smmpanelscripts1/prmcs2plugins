@@ -1,0 +1,3 @@
+Navigation:
+  Routes:
+    - { Name: "Plugin Install", Path: "/plugin-install", Type: "server", Component: "PluginInstall", AdminOnly: "false" }

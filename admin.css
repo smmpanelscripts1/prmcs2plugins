@@ -1,0 +1,8 @@
+.prm-cs2-table td {
+  vertical-align: middle !important;
+}
+
+.prm-cs2-table .text-muted {
+  font-size: 12px;
+  margin-top: 2px;
+}

@@ -1,0 +1,12 @@
+.DS_Store
+Thumbs.db
+*.blueprint
+__pycache__/
+*.pyc
+.env
+.env.*
+data/_chunks/
+_probe*.sh
+*.log
+.settings.json
+storage/

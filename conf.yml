@@ -1,0 +1,37 @@
+info:
+  name: "PRM CS2 Plugin Installer"
+  identifier: "prmcsplugins"
+  description: "CS2 sunucularına MetaMod, CounterStrikeSharp ve CSS pluginlerini panelden kur / kaldır."
+  flags: ""
+  version: "1.3.1"
+  target: "beta-2026-08"
+  author: "smmpanelscripts1"
+  icon: ""
+  website: "https://github.com/smmpanelscripts1/prmcs2plugins"
+
+admin:
+  view: "view.blade.php"
+  controller: ""
+  css: "admin.css"
+  wrapper: "admin/wrapper.blade.php"
+
+dashboard:
+  css: ""
+  wrapper: ""
+  components: "components"
+
+data:
+  directory: ""
+  public: ""
+  console: ""
+
+requests:
+  views: ""
+  app: ""
+  routers:
+    application: ""
+    client: "routes/client.php"
+    web: "routes/web.php"
+
+database:
+  migrations: ""
