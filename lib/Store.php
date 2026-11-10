@@ -17,7 +17,7 @@ class Store
     public static function defaults(): array
     {
         return [
-            'helper_url' => 'http://prm-plugin-helper:8100',
+            'helper_url' => trim((string) env('PRM_PLUGIN_HELPER_URL', 'http://prm-plugin-helper:8100')) ?: 'http://prm-plugin-helper:8100',
             'volumes_root' => '/data',
             'custom_plugins' => [],
             'logs' => [],

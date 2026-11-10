@@ -3,7 +3,7 @@ info:
   identifier: "prmcsplugins"
   description: "CS2 sunucularına MetaMod, CounterStrikeSharp ve CSS pluginlerini panelden kur / kaldır."
   flags: ""
-  version: "1.3.1"
+  version: "1.3.2"
   target: "beta-2026-08"
   author: "smmpanelscripts1"
   icon: ""

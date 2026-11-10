@@ -4,11 +4,32 @@ namespace PrmCs2Plugins;
 
 class HelperClient
 {
+    public static function bases(): array
+    {
+        $urls = [];
+        $configured = trim((string) (Store::all()['helper_url'] ?? ''));
+        if ($configured !== '') {
+            $urls[] = rtrim($configured, '/');
+        }
+        $env = trim((string) env('PRM_PLUGIN_HELPER_URL', ''));
+        if ($env !== '') {
+            $urls[] = rtrim($env, '/');
+        }
+        $urls[] = 'http://prm-plugin-helper:8100';
+        if (class_exists(\Pterodactyl\Models\Node::class)) {
+            foreach (\Pterodactyl\Models\Node::query()->orderBy('id')->get(['fqdn']) as $node) {
+                if ($node->fqdn) {
+                    $urls[] = 'http://' . $node->fqdn . ':8100';
+                }
+            }
+        }
+
+        return array_values(array_unique($urls));
+    }
+
     public static function base(): string
     {
-        $url = trim((string) (Store::all()['helper_url'] ?? ''));
-
-        return $url !== '' ? rtrim($url, '/') : 'http://prm-plugin-helper:8100';
+        return self::bases()[0];
     }
 
     public static function health(): array
@@ -51,36 +72,44 @@ class HelperClient
 
     private static function request(string $method, string $path, ?array $body = null): array
     {
-        $ch = curl_init(self::base() . $path);
-        $headers = ['Accept: application/json'];
-        $opts = [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 300,
-            CURLOPT_CUSTOMREQUEST => $method,
-        ];
-        if ($body !== null) {
-            $headers[] = 'Content-Type: application/json';
-            $opts[CURLOPT_POSTFIELDS] = json_encode($body);
-        }
-        $opts[CURLOPT_HTTPHEADER] = $headers;
-        curl_setopt_array($ch, $opts);
-        $raw = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
+        $lastError = 'Plugin helper unreachable';
+        foreach (self::bases() as $base) {
+            $ch = curl_init($base . $path);
+            $headers = ['Accept: application/json'];
+            $opts = [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_TIMEOUT => 300,
+                CURLOPT_CUSTOMREQUEST => $method,
+            ];
+            if ($body !== null) {
+                $headers[] = 'Content-Type: application/json';
+                $opts[CURLOPT_POSTFIELDS] = json_encode($body);
+            }
+            $opts[CURLOPT_HTTPHEADER] = $headers;
+            curl_setopt_array($ch, $opts);
+            $raw = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err = curl_error($ch);
+            curl_close($ch);
 
-        if ($raw === false) {
-            throw new \RuntimeException('Plugin helper unreachable: ' . $err);
+            if ($raw === false) {
+                $lastError = 'Plugin helper unreachable: ' . $err;
+                continue;
+            }
+
+            $json = json_decode((string) $raw, true);
+            if (!is_array($json)) {
+                $lastError = 'Plugin helper bad response (' . $code . ')';
+                continue;
+            }
+            if ($code >= 400 || (isset($json['ok']) && $json['ok'] === false)) {
+                throw new \RuntimeException($json['error'] ?? ('Plugin helper error ' . $code));
+            }
+
+            return $json;
         }
 
-        $json = json_decode((string) $raw, true);
-        if (!is_array($json)) {
-            throw new \RuntimeException('Plugin helper bad response (' . $code . ')');
-        }
-        if ($code >= 400 || (isset($json['ok']) && $json['ok'] === false)) {
-            throw new \RuntimeException($json['error'] ?? ('Plugin helper error ' . $code));
-        }
-
-        return $json;
+        throw new \RuntimeException($lastError);
     }
 }
