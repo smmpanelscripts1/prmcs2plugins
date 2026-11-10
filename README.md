@@ -28,7 +28,9 @@ prm-plugin-helper:
 
 Panel ile aynı Docker network’te olmalı. Varsayılan URL: `http://prm-plugin-helper:8100`
 
-GKE / ayrı Wings node için helper’ı volume’un durduğu makinede çalıştır. Panel `prm-plugin-helper` hostname’ini çözemezse node FQDN `:8100` adresine düşer. İstersen admin ayarından veya `PRM_PLUGIN_HELPER_URL` ile sabitle.
+Helper volume kökünü otomatik dener (`/data`, `/var/lib/pterodactyl/volumes`, `/peto-volumes`, …). Farklı mount için `PRM_VOLUMES` ile virgülle kök listesi ver.
+
+GKE / ayrı Wings node için helper’ı volume’un durduğu makinede çalıştır. Panel `prm-plugin-helper` hostname’ini çözemezse `host.docker.internal:8100`, `127.0.0.1:8100` ve node FQDN `:8100` adreslerine düşer. İstersen admin ayarından veya `PRM_PLUGIN_HELPER_URL` ile sabitle.
 
 Windows’ta volume yolu örnek: `D:/pterodactyl/volumes:/data`
 

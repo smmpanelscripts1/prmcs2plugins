@@ -14,9 +14,45 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
-DATA = Path("/data")
 WINGS_UID = 988
 WINGS_GID = 988
+DEFAULT_ROOTS = (
+    "/data",
+    "/var/lib/pterodactyl/volumes",
+    "/peto-volumes",
+    "/srv/daemon-data",
+    "/srv/pterodactyl/volumes",
+)
+
+
+def volume_roots() -> list[Path]:
+    ordered: list[Path] = []
+    raw = os.environ.get("PRM_VOLUMES", "")
+    for chunk in raw.replace(";", ",").split(","):
+        item = chunk.strip()
+        if item:
+            ordered.append(Path(item))
+    ordered.extend(Path(p) for p in DEFAULT_ROOTS)
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in ordered:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_dir():
+            out.append(path)
+    return out
+
+
+def server_dir(uuid: str) -> Path:
+    uid = _safe_uuid(uuid)
+    for root in volume_roots():
+        candidate = root / uid
+        if candidate.is_dir():
+            return candidate
+    roots = volume_roots()
+    return (roots[0] if roots else Path("/data")) / uid
 
 
 def _safe_uuid(value: str) -> str:
@@ -92,7 +128,7 @@ def _find_payload_root(extracted: Path, hint: str | None) -> Path:
 
 
 def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: str | None) -> dict:
-    server = DATA / _safe_uuid(uuid)
+    server = server_dir(uuid)
     if not server.is_dir():
         raise FileNotFoundError(f"volume missing: {uuid}")
 
@@ -140,7 +176,7 @@ def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: 
 
 
 def remove_rel(uuid: str, rel: str) -> dict:
-    server = DATA / _safe_uuid(uuid)
+    server = server_dir(uuid)
     target = server / _safe_rel(rel)
     if not str(target).startswith(str(server)):
         raise ValueError("path escape")
@@ -154,7 +190,7 @@ def remove_rel(uuid: str, rel: str) -> dict:
 
 
 def list_rel(uuid: str, rel: str) -> dict:
-    server = DATA / _safe_uuid(uuid)
+    server = server_dir(uuid)
     target = server / _safe_rel(rel) if rel else server
     if not target.exists():
         return {"ok": True, "entries": []}
@@ -171,7 +207,7 @@ def list_rel(uuid: str, rel: str) -> dict:
 
 
 def exists_rel(uuid: str, rel: str) -> dict:
-    server = DATA / _safe_uuid(uuid)
+    server = server_dir(uuid)
     target = server / _safe_rel(rel)
     return {"ok": True, "exists": target.exists(), "dir": target.is_dir() if target.exists() else False}
 

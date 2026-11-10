@@ -16,6 +16,8 @@ class HelperClient
             $urls[] = rtrim($env, '/');
         }
         $urls[] = 'http://prm-plugin-helper:8100';
+        $urls[] = 'http://host.docker.internal:8100';
+        $urls[] = 'http://127.0.0.1:8100';
         if (class_exists(\Pterodactyl\Models\Node::class)) {
             foreach (\Pterodactyl\Models\Node::query()->orderBy('id')->get(['fqdn']) as $node) {
                 if ($node->fqdn) {
@@ -99,6 +101,10 @@ class HelperClient
             }
 
             $json = json_decode((string) $raw, true);
+            if ($code === 404) {
+                $lastError = "Plugin helper {$base} has no {$path}";
+                continue;
+            }
             if (!is_array($json)) {
                 $lastError = 'Plugin helper bad response (' . $code . ')';
                 continue;
