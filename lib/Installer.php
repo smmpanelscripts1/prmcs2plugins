@@ -239,6 +239,23 @@ class Installer
         }
         $local = self::assignInstalled($local, $pluginsDir);
 
+        $framework = [
+            'metamod' => HelperClient::exists($uuid, 'game/csgo/addons/metamod'),
+            'counterstrikesharp' => HelperClient::exists($uuid, 'game/csgo/addons/counterstrikesharp'),
+        ];
+        foreach ($local as &$plugin) {
+            $id = (string) ($plugin['id'] ?? '');
+            if ($id === 'metamod') {
+                $plugin['installed'] = $framework['metamod'];
+                $plugin['installed_folder'] = $framework['metamod'] ? 'metamod' : null;
+            }
+            if ($id === 'counterstrikesharp') {
+                $plugin['installed'] = $framework['counterstrikesharp'];
+                $plugin['installed_folder'] = $framework['counterstrikesharp'] ? 'counterstrikesharp' : null;
+            }
+        }
+        unset($plugin);
+
         $remoteMeta = ['count' => 0, 'generated_at' => null, 'fetched_at' => null, 'error' => null];
         $community = [];
         try {
@@ -272,10 +289,7 @@ class Installer
                 'name' => $server->name,
                 'uuid' => $uuid,
             ],
-            'framework' => [
-                'metamod' => HelperClient::exists($uuid, 'game/csgo/addons/metamod'),
-                'counterstrikesharp' => HelperClient::exists($uuid, 'game/csgo/addons/counterstrikesharp'),
-            ],
+            'framework' => $framework,
             'plugins_dir' => $pluginsDir,
             'catalog' => $local,
             'community' => $community,
