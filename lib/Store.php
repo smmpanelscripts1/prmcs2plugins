@@ -21,6 +21,7 @@ class Store
             'volumes_root' => '/data',
             'custom_plugins' => [],
             'logs' => [],
+            'installed_map' => [],
         ];
     }
 
@@ -70,5 +71,34 @@ class Store
         ]);
         $data['logs'] = array_slice($logs, 0, 80);
         self::save($data);
+    }
+
+    public static function markInstalled(string $uuid, string $pluginId, array $folders): void
+    {
+        $data = self::all();
+        $map = is_array($data['installed_map'] ?? null) ? $data['installed_map'] : [];
+        if (!isset($map[$uuid]) || !is_array($map[$uuid])) {
+            $map[$uuid] = [];
+        }
+        $map[$uuid][$pluginId] = array_values(array_unique(array_filter($folders)));
+        $data['installed_map'] = $map;
+        self::save($data);
+    }
+
+    public static function unmarkInstalled(string $uuid, string $pluginId): void
+    {
+        $data = self::all();
+        $map = is_array($data['installed_map'] ?? null) ? $data['installed_map'] : [];
+        unset($map[$uuid][$pluginId]);
+        $data['installed_map'] = $map;
+        self::save($data);
+    }
+
+    public static function rememberedFolders(string $uuid, string $pluginId): array
+    {
+        $map = self::all()['installed_map'] ?? [];
+        $folders = $map[$uuid][$pluginId] ?? [];
+
+        return is_array($folders) ? array_values(array_filter($folders)) : [];
     }
 }

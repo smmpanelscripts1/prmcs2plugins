@@ -38,7 +38,7 @@ class Catalog
                 'dest_rel' => 'game/csgo',
                 'mode' => 'merge',
                 'detect' => 'game/csgo/addons/counterstrikesharp',
-                'requires' => [],
+                'requires' => ['metamod'],
             ],
             [
                 'id' => 'anybaselib',

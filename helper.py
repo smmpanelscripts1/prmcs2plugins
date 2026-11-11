@@ -5,13 +5,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import socket
+import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+socket.getaddrinfo = _ipv4_getaddrinfo
 
 
 WINGS_UID = 988
@@ -96,38 +110,92 @@ def _merge_tree(src: Path, dst: Path) -> int:
     return count
 
 
-def _find_payload_root(extracted: Path, hint: str | None) -> Path:
-    """Pick the folder that actually contains addons/ or plugins/ content."""
+def _tokens(name: str) -> set[str]:
+    s = re.sub(r"\[[^\]]*\]", "", name or "")
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+    s = re.sub(r"[/_\-]+", " ", s).lower()
+    s = re.sub(r"^(cs2|css)\s+", "", s)
+    drop = {"cs2", "css", "plugin", "plugins", "mod", "for", "the", "and", "with"}
+    return {p for p in re.split(r"[^a-z0-9]+", s) if len(p) >= 3 and p not in drop}
+
+
+def _keep_matching_plugins(payload: Path, dest_rel: str, only_names: list[str] | None) -> None:
+    dest = (dest_rel or "").replace("\\", "/").strip("/")
+    plugins = payload / "plugins"
+    if not dest.endswith("counterstrikesharp") or not plugins.is_dir() or not only_names:
+        return
+    dirs = [p for p in plugins.iterdir() if p.is_dir()]
+    if len(dirs) <= 1:
+        return
+    want: set[str] = set()
+    for name in only_names:
+        want |= _tokens(str(name))
+    if not want:
+        return
+
+    def score(path: Path) -> int:
+        got = _tokens(path.name)
+        overlap = got & want
+        extra = overlap - {"bot"}
+        if len(overlap) >= 2 or extra:
+            return 10 + len(overlap) * 5 + len(extra) * 8
+        return len(overlap)
+
+    ranked = sorted(((score(d), d) for d in dirs), key=lambda x: x[0], reverse=True)
+    keep = {d.name for sc, d in ranked if sc >= 10}
+    if not keep and ranked:
+        keep = {ranked[0][1].name}
+    bases = {re.sub(r"(api|impl)$", "", n, flags=re.I) for n in keep}
+    for d in dirs:
+        base = re.sub(r"(api|impl)$", "", d.name, flags=re.I)
+        if base in bases:
+            keep.add(d.name)
+    for d in dirs:
+        if d.name not in keep:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _find_payload_root(extracted: Path, hint: str | None, dest_rel: str = "") -> Path:
+    """Pick the folder that should be merged into dest_rel."""
+    dest = (dest_rel or "").replace("\\", "/").strip("/")
     if hint:
         candidate = extracted / hint
         if candidate.is_dir():
             return candidate
 
-    # Prefer a directory that already looks like a CSS/addons tree.
-    for marker in (
-        "addons/counterstrikesharp",
-        "addons/metamod",
-        "counterstrikesharp",
-        "metamod",
-        "plugins",
-    ):
-        hit = extracted / marker
-        if hit.exists():
-            # return parent that should be merged into dest
-            if marker.startswith("addons/"):
-                return extracted
-            if marker in ("counterstrikesharp", "metamod"):
-                return extracted
-            if marker == "plugins":
-                return extracted
+    css_inside = extracted / "addons" / "counterstrikesharp"
+    mm_inside = extracted / "addons" / "metamod"
+    if dest.endswith("counterstrikesharp") and css_inside.is_dir():
+        return css_inside
+    if dest.endswith("csgo") and (css_inside.is_dir() or mm_inside.is_dir() or (extracted / "addons").is_dir()):
+        return extracted
+    if dest.endswith("counterstrikesharp") and (extracted / "plugins").is_dir():
+        return extracted
 
     children = [p for p in extracted.iterdir() if p.name not in (".", "..")]
     if len(children) == 1 and children[0].is_dir():
-        return children[0]
+        return _find_payload_root(children[0], None, dest_rel)
     return extracted
 
 
-def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: str | None) -> dict:
+def _normalize_css_layout(server: Path) -> None:
+    """Hoist nested addons/counterstrikesharp trees into the real CSS folder."""
+    css = server / "game/csgo/addons/counterstrikesharp"
+    if not css.is_dir():
+        return
+    nested = css / "addons" / "counterstrikesharp"
+    try:
+        if nested.is_dir() and nested.resolve() != css.resolve():
+            _merge_tree(nested, css)
+            shutil.rmtree(nested, ignore_errors=True)
+            leftover = css / "addons"
+            if leftover.is_dir() and not any(leftover.iterdir()):
+                leftover.rmdir()
+    except OSError:
+        pass
+
+
+def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: str | None, only_names: list | None = None) -> dict:
     server = server_dir(uuid)
     if not server.is_dir():
         raise FileNotFoundError(f"volume missing: {uuid}")
@@ -147,10 +215,39 @@ def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: 
 
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "PRM-CS2-Plugin-Installer/1.0"},
+            headers={
+                "User-Agent": "PRM-CS2-Plugin-Installer/1.0",
+                "Accept": "application/octet-stream,*/*",
+            },
         )
-        with urllib.request.urlopen(req, timeout=180) as resp, open(archive, "wb") as out:
-            shutil.copyfileobj(resp, out)
+        last_err: Exception | None = None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=45) as resp, open(archive, "wb") as out:
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    length = int(resp.headers.get("Content-Length") or "0")
+                    if "text/html" in ctype:
+                        raise RuntimeError("GitHub zip yerine HTML döndü (release yok veya rate limit)")
+                    if length > 80 * 1024 * 1024:
+                        raise RuntimeError(f"Paket çok büyük ({length} byte). with-cssharp/full pack indirme.")
+                    shutil.copyfileobj(resp, out, length=256 * 1024)
+                last_err = None
+                break
+            except (TimeoutError, socket.gaierror, urllib.error.URLError, OSError) as exc:
+                last_err = exc
+                sys.stderr.write(f"download retry {attempt + 1}/4 {url} {exc}\n")
+                time.sleep(1.5 * (attempt + 1))
+        if last_err is not None:
+            raise RuntimeError(f"GitHub indirme başarısız: {last_err}") from last_err
+
+        magic = archive.read_bytes()[:4]
+        if kind != "tar.gz" and magic.startswith(b"PK"):
+            kind = "zip"
+        elif magic.startswith(b"\x1f\x8b"):
+            kind = "tar.gz"
+        else:
+            preview = archive.read_bytes()[:80]
+            raise RuntimeError("İndirilen dosya zip/tar değil: " + preview[:80].decode("utf-8", "replace"))
 
         extract_dir = tmp_path / "out"
         extract_dir.mkdir()
@@ -161,7 +258,8 @@ def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: 
             with zipfile.ZipFile(archive, "r") as zf:
                 zf.extractall(extract_dir)
 
-        payload = _find_payload_root(extract_dir, strip_hint)
+        payload = _find_payload_root(extract_dir, strip_hint, dest_rel)
+        _keep_matching_plugins(payload, dest_rel, [str(n) for n in (only_names or []) if n])
 
         if mode == "replace_dir":
             if dest.exists():
@@ -171,8 +269,18 @@ def download_extract(uuid: str, url: str, dest_rel: str, mode: str, strip_hint: 
         else:
             files = _merge_tree(payload, dest)
 
+        _normalize_css_layout(server)
         _chown_tree(dest)
-        return {"ok": True, "files": files, "dest": str(dest_rel)}
+        plugins_path = server / "game/csgo/addons/counterstrikesharp/plugins"
+        plugin_dirs = []
+        if plugins_path.is_dir():
+            plugin_dirs = [p.name for p in plugins_path.iterdir() if p.is_dir()]
+        return {
+            "ok": True,
+            "files": files,
+            "dest": str(dest_rel),
+            "plugin_dirs": plugin_dirs,
+        }
 
 
 def remove_rel(uuid: str, rel: str) -> dict:
@@ -191,6 +299,7 @@ def remove_rel(uuid: str, rel: str) -> dict:
 
 def list_rel(uuid: str, rel: str) -> dict:
     server = server_dir(uuid)
+    _normalize_css_layout(server)
     target = server / _safe_rel(rel) if rel else server
     if not target.exists():
         return {"ok": True, "entries": []}
@@ -208,13 +317,14 @@ def list_rel(uuid: str, rel: str) -> dict:
 
 def exists_rel(uuid: str, rel: str) -> dict:
     server = server_dir(uuid)
+    _normalize_css_layout(server)
     target = server / _safe_rel(rel)
     return {"ok": True, "exists": target.exists(), "dir": target.is_dir() if target.exists() else False}
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
-        pass
+        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def _json(self, code: int, payload: dict) -> None:
         raw = json.dumps(payload).encode("utf-8")
@@ -262,12 +372,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json()
             if self.path == "/install":
+                only_names = body.get("only_names") or []
+                if not isinstance(only_names, list):
+                    only_names = []
                 result = download_extract(
                     str(body.get("uuid", "")),
                     str(body.get("url", "")),
                     str(body.get("dest_rel", "")),
                     str(body.get("mode", "merge") or "merge"),
                     body.get("strip_hint"),
+                    only_names,
                 )
                 self._json(200, result)
                 return

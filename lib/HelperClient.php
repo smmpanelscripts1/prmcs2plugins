@@ -8,23 +8,15 @@ class HelperClient
     {
         $urls = [];
         $configured = trim((string) (Store::all()['helper_url'] ?? ''));
-        if ($configured !== '') {
+        if ($configured !== '' && !str_contains($configured, '127.0.0.1') && !str_contains($configured, 'localhost')) {
             $urls[] = rtrim($configured, '/');
         }
         $env = trim((string) env('PRM_PLUGIN_HELPER_URL', ''));
-        if ($env !== '') {
+        if ($env !== '' && !str_contains($env, '127.0.0.1') && !str_contains($env, 'localhost')) {
             $urls[] = rtrim($env, '/');
         }
         $urls[] = 'http://prm-plugin-helper:8100';
         $urls[] = 'http://host.docker.internal:8100';
-        $urls[] = 'http://127.0.0.1:8100';
-        if (class_exists(\Pterodactyl\Models\Node::class)) {
-            foreach (\Pterodactyl\Models\Node::query()->orderBy('id')->get(['fqdn']) as $node) {
-                if ($node->fqdn) {
-                    $urls[] = 'http://' . $node->fqdn . ':8100';
-                }
-            }
-        }
 
         return array_values(array_unique($urls));
     }
@@ -53,7 +45,7 @@ class HelperClient
         return is_array($res['entries'] ?? null) ? $res['entries'] : [];
     }
 
-    public static function install(string $uuid, string $url, string $destRel, string $mode = 'merge', ?string $stripHint = null): array
+    public static function install(string $uuid, string $url, string $destRel, string $mode = 'merge', ?string $stripHint = null, array $onlyNames = []): array
     {
         return self::request('POST', '/install', [
             'uuid' => $uuid,
@@ -61,6 +53,7 @@ class HelperClient
             'dest_rel' => $destRel,
             'mode' => $mode,
             'strip_hint' => $stripHint,
+            'only_names' => array_values($onlyNames),
         ]);
     }
 
@@ -80,8 +73,9 @@ class HelperClient
             $headers = ['Accept: application/json'];
             $opts = [
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CONNECTTIMEOUT => 3,
-                CURLOPT_TIMEOUT => 300,
+                CURLOPT_CONNECTTIMEOUT => 4,
+                CURLOPT_TIMEOUT => $body ? 300 : 20,
+                CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
                 CURLOPT_CUSTOMREQUEST => $method,
             ];
             if ($body !== null) {
@@ -96,7 +90,7 @@ class HelperClient
             curl_close($ch);
 
             if ($raw === false) {
-                $lastError = 'Plugin helper unreachable: ' . $err;
+                $lastError = 'Plugin helper unreachable (' . $base . '): ' . $err;
                 continue;
             }
 
@@ -106,7 +100,7 @@ class HelperClient
                 continue;
             }
             if (!is_array($json)) {
-                $lastError = 'Plugin helper bad response (' . $code . ')';
+                $lastError = 'Plugin helper bad response (' . $code . ') from ' . $base;
                 continue;
             }
             if ($code >= 400 || (isset($json['ok']) && $json['ok'] === false)) {
